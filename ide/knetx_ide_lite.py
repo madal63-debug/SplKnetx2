@@ -1,10 +1,12 @@
-"""KnetX SoftPLC - IDE-lite (MVP) — single-instance robust
+"""KnetX SoftPLC - IDE-lite (MVP) — Nuovo Progetto integrato
 
-Fix: enforce ONE IDE instance (per-user) using QtCore.QLockFile.
-- If a second instance starts, it shows a message and exits.
+Adds:
+- Toolbar action: "Nuovo progetto"
+- Creates a minimal project skeleton (Init + Main, 1 sheet each) without using PowerShell.
+- After creation, auto-opens the project.
 
-Run (dev):
-  python ide/knetx_ide_lite.py
+Single-instance:
+- Uses QtCore.QLockFile (per-user).
 
 Build EXE (no console):
   pyinstaller --noconsole --onefile --name knetx_ide .\ide\knetx_ide_lite.py
@@ -17,6 +19,7 @@ import socket
 import struct
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -24,6 +27,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 
 APP_NAME = "KnetX IDE-lite"
+SCHEMA_VERSION_PROJECT = 1
 
 
 # ----------------------------
@@ -75,7 +79,7 @@ class RuntimeClient:
 
 
 # ----------------------------
-# Project model
+# Project model + I/O
 # ----------------------------
 
 @dataclass
@@ -92,6 +96,10 @@ def load_json(p: Path) -> Dict[str, Any]:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def write_json(p: Path, obj: Dict[str, Any]) -> None:
+    p.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def load_project(folder: Path) -> Project:
     pj = load_json(folder / "project.json")
     pages = load_json(folder / "pages.json")
@@ -99,6 +107,106 @@ def load_project(folder: Path) -> Project:
     mon = load_json(folder / "monitors.json")
     name = str(pj.get("name", folder.name))
     return Project(root=folder, name=name, project_json=pj, pages_json=pages, vars_json=varsj, monitors_json=mon)
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def st_sheet_template(pou_name: str, human_title: str) -> str:
+    return (
+        f"(* {human_title} — {pou_name} *)\n"
+        f"FUNCTION_BLOCK {pou_name}\n"
+        f"VAR\n"
+        f"  (* locals here *)\n"
+        f"END_VAR\n\n"
+        f"(* user code here *)\n\n"
+        f"END_FUNCTION_BLOCK\n"
+    )
+
+
+def st_wrapper_template(wrapper_name: str, sheet_pou_names: list[str]) -> str:
+    decl = "\n".join([f"  fb_{n} : {n};" for n in sheet_pou_names])
+    calls = "\n".join([f"fb_{n}();" for n in sheet_pou_names])
+    return (
+        "(* AUTO-GENERATED — DO NOT EDIT BY HAND *)\n"
+        f"FUNCTION_BLOCK {wrapper_name}\n"
+        "VAR\n"
+        f"{decl}\n"
+        "END_VAR\n\n"
+        f"{calls}\n\n"
+        "END_FUNCTION_BLOCK\n"
+    )
+
+
+def create_project_skeleton(out_dir: Path, name: str) -> None:
+    if out_dir.exists() and any(out_dir.iterdir()):
+        raise RuntimeError(f"Cartella non vuota: {out_dir}")
+
+    ensure_dir(out_dir)
+    ensure_dir(out_dir / "pages")
+    ensure_dir(out_dir / "data")
+
+    project = {
+        "schema_version": SCHEMA_VERSION_PROJECT,
+        "name": name,
+        "created_utc": utc_now_iso(),
+        "languages": ["ST"],
+        "targets": {
+            "localsim": {"host": "127.0.0.1", "port": 1963},
+            "linux_runtime": {"host": "<set in IDE settings>", "port": 1963},
+        },
+        "memory": {"plc_bytes": 1048576, "retain_bytes": 65536},
+    }
+
+    pages = {
+        "schema_version": 1,
+        "init": {
+            "id": "INIT",
+            "name": "Init",
+            "sheets": [
+                {"id": "S001", "name": "Foglio1", "file": "pages/INIT/S001.st", "pou": "INIT_S001"}
+            ],
+        },
+        "pages": [
+            {
+                "id": "P001",
+                "name": "Main",
+                "enabled": True,
+                "sheets": [
+                    {"id": "S001", "name": "Foglio1", "file": "pages/P001/S001.st", "pou": "P001_S001"}
+                ],
+            }
+        ],
+    }
+
+    vars_json = {
+        "schema_version": 1,
+        "var_global": [],
+        "types": {"builtins": ["BOOL", "BYTE", "INT", "UINT", "UDINT", "REAL"]},
+    }
+
+    monitors_json = {"schema_version": 1, "presets": []}
+
+    write_json(out_dir / "project.json", project)
+    write_json(out_dir / "pages.json", pages)
+    write_json(out_dir / "vars.json", vars_json)
+    write_json(out_dir / "monitors.json", monitors_json)
+
+    init_dir = out_dir / "pages" / "INIT"
+    p001_dir = out_dir / "pages" / "P001"
+    ensure_dir(init_dir)
+    ensure_dir(p001_dir)
+
+    (init_dir / "S001.st").write_text(st_sheet_template("INIT_S001", "Init / Foglio1"), encoding="utf-8")
+    (p001_dir / "S001.st").write_text(st_sheet_template("P001_S001", "Main / Foglio1"), encoding="utf-8")
+
+    (out_dir / "pages" / "INIT.st").write_text(st_wrapper_template("INIT", ["INIT_S001"]), encoding="utf-8")
+    (out_dir / "pages" / "P001.st").write_text(st_wrapper_template("P001", ["P001_S001"]), encoding="utf-8")
 
 
 # ----------------------------
@@ -146,6 +254,46 @@ class SettingsWidget(QtWidgets.QWidget):
         self.profile_changed.emit(p)
 
 
+class NewProjectDialog(QtWidgets.QDialog):
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Nuovo progetto")
+
+        self.ed_name = QtWidgets.QLineEdit("Demo2")
+        self.ed_base = QtWidgets.QLineEdit(str(Path.home() / "SplKnetxProjects"))
+        self.btn_pick = QtWidgets.QPushButton("...")
+        self.btn_pick.setFixedWidth(28)
+
+        row_base = QtWidgets.QHBoxLayout()
+        row_base.addWidget(self.ed_base)
+        row_base.addWidget(self.btn_pick)
+
+        form = QtWidgets.QFormLayout()
+        form.addRow("Nome progetto", self.ed_name)
+        form.addRow("Cartella base", row_base)
+
+        btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.addLayout(form)
+        root.addWidget(btns)
+
+        self.btn_pick.clicked.connect(self.pick_base)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+
+    def pick_base(self) -> None:
+        d = QtWidgets.QFileDialog.getExistingDirectory(self, "Scegli cartella base", self.ed_base.text())
+        if d:
+            self.ed_base.setText(d)
+
+    def get_values(self) -> Tuple[str, Path]:
+        name = self.ed_name.text().strip()
+        base = Path(self.ed_base.text().strip()).expanduser().resolve()
+        return name, base
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -154,19 +302,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.project: Optional[Project] = None
         self.client = RuntimeClient()
 
-        # Toolbar (compact)
         tb = QtWidgets.QToolBar()
         tb.setMovable(False)
         tb.setIconSize(QtCore.QSize(16, 16))
         tb.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
         self.addToolBar(tb)
 
+        act_new = QtGui.QAction("Nuovo progetto", self)
         act_open = QtGui.QAction("Apri progetto", self)
         act_settings = QtGui.QAction("Settings", self)
         act_connect = QtGui.QAction("Connetti", self)
         act_compile = QtGui.QAction("Compila", self)
         act_download = QtGui.QAction("Download", self)
 
+        tb.addAction(act_new)
         tb.addAction(act_open)
         tb.addSeparator()
         tb.addAction(act_settings)
@@ -175,13 +324,13 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.addAction(act_compile)
         tb.addAction(act_download)
 
+        act_new.triggered.connect(self.new_project)
         act_open.triggered.connect(self.open_project)
         act_settings.triggered.connect(lambda: self.tabs.setCurrentWidget(self.tab_settings))
         act_connect.triggered.connect(self.refresh_status)
         act_compile.triggered.connect(self.stub_compile)
         act_download.triggered.connect(self.stub_download)
 
-        # Central split
         self.split = QtWidgets.QSplitter()
         self.split.setChildrenCollapsible(False)
 
@@ -203,7 +352,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.split.setStretchFactor(1, 1)
         self.split.setSizes([220, 900])
 
-        # Tabs
         self.tab_pages = QtWidgets.QWidget()
         self.tab_settings = QtWidgets.QWidget()
         self.tab_output = QtWidgets.QWidget()
@@ -212,7 +360,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self.tab_settings, "Settings")
         self.tabs.addTab(self.tab_output, "Output")
 
-        self.pages_label = QtWidgets.QLabel("Apri un progetto per vedere Pagine/Fogli.")
+        self.pages_label = QtWidgets.QLabel("Apri o crea un progetto per vedere Pagine/Fogli.")
         self.pages_label.setStyleSheet("font-size:11px;")
         lay_pages = QtWidgets.QVBoxLayout(self.tab_pages)
         lay_pages.setContentsMargins(6, 6, 6, 6)
@@ -233,7 +381,6 @@ class MainWindow(QtWidgets.QMainWindow):
         lay_out.setContentsMargins(6, 6, 6, 6)
         lay_out.addWidget(self.output)
 
-        # Status
         self.lbl_status = QtWidgets.QLabel("OFFLINE")
         self.lbl_monitors = QtWidgets.QLabel("MONITORS: 0")
         self.btn_show_monitors = QtWidgets.QPushButton("Visualizza nascosti")
@@ -310,16 +457,38 @@ class MainWindow(QtWidgets.QMainWindow):
         root_pages.setExpanded(True)
         root_bus.setExpanded(True)
 
+    def _open_project_path(self, folder: Path) -> None:
+        self.project = load_project(folder)
+        self.setWindowTitle(f"{APP_NAME} — {self.project.name}")
+        self.populate_tree_from_project()
+        self.pages_label.setText(f"Progetto aperto: {self.project.name}\n(placeholder editor ST/FBD)")
+        self.log(f"OK: aperto progetto {self.project.root}")
+
+    def new_project(self) -> None:
+        dlg = NewProjectDialog(self)
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
+
+        name, base = dlg.get_values()
+        if not name:
+            QtWidgets.QMessageBox.warning(self, "Nuovo progetto", "Nome progetto vuoto.")
+            return
+
+        out_dir = base / name
+        try:
+            ensure_dir(base)
+            create_project_skeleton(out_dir, name)
+            self.log(f"OK: creato progetto {out_dir}")
+            self._open_project_path(out_dir)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Errore", str(e))
+
     def open_project(self) -> None:
         folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Seleziona cartella progetto")
         if not folder:
             return
         try:
-            self.project = load_project(Path(folder))
-            self.setWindowTitle(f"{APP_NAME} — {self.project.name}")
-            self.populate_tree_from_project()
-            self.pages_label.setText(f"Progetto aperto: {self.project.name}\n(placeholder editor ST/FBD)")
-            self.log(f"OK: aperto progetto {self.project.root}")
+            self._open_project_path(Path(folder))
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Errore", str(e))
 
@@ -345,7 +514,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 # ----------------------------
-# Main
+# Single-instance lock
 # ----------------------------
 
 _lock_file: Optional[QtCore.QLockFile] = None
@@ -359,7 +528,7 @@ def acquire_ide_lock() -> bool:
     lock_path = str(p / "knetx_ide.lock")
 
     lf = QtCore.QLockFile(lock_path)
-    lf.setStaleLockTime(5_000)  # 5s
+    lf.setStaleLockTime(5_000)
     ok = lf.tryLock(100)
     if ok:
         _lock_file = lf

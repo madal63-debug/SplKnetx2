@@ -1,32 +1,26 @@
-# Create these files in C:\SplKnetx
-
-# --- .gitignore ---
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-
-# Virtual environments
-knetxenv*/
-.venv/
-venv/
-
-# Logs
-logs/
-*.log
-
-# OS / Editor
-.DS_Store
-Thumbs.db
-*.swp
-
-# Build artifacts (future)
-/build/
-/dist/
-*.egg-info/
-projects/
-dist/
+﻿# build outputs
+dist_ide/
+dist_sim/
 build/
 *.spec
-*.vbs
+
+# python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# backups/logs
+*.bak
+*.log
+
+# editors/venv
+.venv/
+venv/
+.idea/
+.vscode/
+
+# local artifacts
+dist/
+knetxenv/
+projects/
+

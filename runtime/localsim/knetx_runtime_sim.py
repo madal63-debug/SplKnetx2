@@ -1,9 +1,12 @@
+# parte 1/3 — runtime/localsim/knetx_runtime_sim.py
 """KnetX SoftPLC - LocalSim Runtime (MVP)
 
 - TCP server on 127.0.0.1:1963 (default)
 - Framing: uint32 little-endian length + JSON UTF-8
-- Commands (MVP): PING, GET_STATUS, START, STOP, SHUTDOWN, GET_DIAG,
-  READ_VARS, SET_VARS, FORCE_SET, FORCE_CLEAR, GET_FORCES
+- Commands (MVP):
+  PING, GET_STATUS, START, STOP, SHUTDOWN, GET_DIAG,
+  READ_VARS, SET_VARS, FORCE_SET, FORCE_CLEAR, GET_FORCES,
+  LOAD_PROJECT (NEW)
 
 Run (PowerShell, with venv active):
   python knetx_runtime_sim.py
@@ -22,7 +25,7 @@ import logging
 import struct
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 
 LOG = logging.getLogger("knetx.localsim")
@@ -30,6 +33,12 @@ LOG = logging.getLogger("knetx.localsim")
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def now_utc_iso() -> str:
+    # niente timezone awareness complicata: stringa leggibile
+    # (se vuoi precisione: metti datetime.now(timezone.utc).isoformat(...))
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def pack_msg(obj: Dict[str, Any]) -> bytes:
@@ -96,6 +105,11 @@ class LocalSimRuntime:
 
     forces: ForceTable = field(default_factory=ForceTable)
 
+    # NEW: last project bundle received from IDE
+    project_loaded: bool = False
+    project_bundle: Optional[Dict[str, Any]] = None
+    project_info: Dict[str, Any] = field(default_factory=dict)
+
     def uptime_ms(self) -> int:
         return int((time.monotonic() - self.start_monotonic) * 1000)
 
@@ -107,6 +121,21 @@ class LocalSimRuntime:
             "resp": "PONG",
             "runtime_state": self.state,
             "uptime_ms": self.uptime_ms(),
+            "project_loaded": self.project_loaded,
+            "caps": [
+                "PING",
+                "GET_STATUS",
+                "START",
+                "STOP",
+                "GET_DIAG",
+                "READ_VARS",
+                "SET_VARS",
+                "FORCE_SET",
+                "FORCE_CLEAR",
+                "GET_FORCES",
+                "LOAD_PROJECT",
+                "SHUTDOWN",
+            ],
         }
 
     def handle_get_status(self) -> Dict[str, Any]:
@@ -116,11 +145,16 @@ class LocalSimRuntime:
             "effective_scan_ms": self.effective_scan_ms,
             "round_time_ms": self.round_time_ms,
             "uptime_ms": self.uptime_ms(),
+            "project_loaded": self.project_loaded,
+            "project_info": self.project_info,
         }
 
     def handle_start(self) -> Dict[str, Any]:
         if self.state == "ERROR":
             raise RuntimeError("Runtime in ERROR: STOP then clear error (MVP: restart LocalSim)")
+        # MVP: richiediamo progetto caricato prima di RUN (evita RUN a vuoto)
+        if not self.project_loaded:
+            raise RuntimeError("No project loaded. Use LOAD_PROJECT first.")
         self._set_state("RUN")
         return {"runtime_state": self.state}
 
@@ -154,6 +188,94 @@ class LocalSimRuntime:
         # In SIM this is allowed; in real runtime this may be restricted.
         self.vars.update(values)
         return {"count": len(values)}
+
+    # ----------------------------
+    # NEW: LOAD_PROJECT
+    # ----------------------------
+    def handle_load_project(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Receives a project bundle from IDE.
+
+        Expected payload:
+          {
+            "project": {...},
+            "pages": {...},
+            "vars": {...},
+            "sources": {"pages/P001/S001.st": "...", ...},
+            "meta": {...}
+          }
+        """
+        project = payload.get("project")
+        pages = payload.get("pages")
+        varsj = payload.get("vars")
+        sources = payload.get("sources")
+        meta = payload.get("meta") or {}
+
+        if not isinstance(project, dict):
+            raise ValueError("payload.project must be object")
+        if not isinstance(pages, dict):
+            raise ValueError("payload.pages must be object")
+        if not isinstance(varsj, dict):
+            raise ValueError("payload.vars must be object")
+        if not isinstance(sources, dict):
+            raise ValueError("payload.sources must be object")
+
+        # validate sources
+        total_bytes = 0
+        st_count = 0
+        for k, v in sources.items():
+            if not isinstance(k, str) or not k:
+                raise ValueError("payload.sources keys must be non-empty strings")
+            if not isinstance(v, str):
+                raise ValueError("payload.sources values must be strings")
+            # rough size accounting (utf-8)
+            b = len(v.encode("utf-8"))
+            total_bytes += b
+            if k.lower().endswith(".st"):
+                st_count += 1
+
+        # store
+        self.project_bundle = {
+            "project": project,
+            "pages": pages,
+            "vars": varsj,
+            "sources": sources,
+            "meta": meta,
+            "received_utc": now_utc_iso(),
+        }
+        self.project_loaded = True
+
+        # summary info for UI
+        p_name = str(project.get("name", ""))
+        n_pages = 0
+        n_sheets = 0
+        try:
+            if isinstance(pages.get("init"), dict):
+                n_pages += 1
+                n_sheets += len(pages.get("init", {}).get("sheets", []) or [])
+            n_pages += len(pages.get("pages", []) or [])
+            for p in (pages.get("pages", []) or []):
+                if isinstance(p, dict):
+                    n_sheets += len(p.get("sheets", []) or [])
+        except Exception:
+            pass
+
+        self.project_info = {
+            "name": p_name,
+            "pages": n_pages,
+            "sheets": n_sheets,
+            "files": len(sources),
+            "st_files": st_count,
+            "bytes": total_bytes,
+            "received_utc": self.project_bundle["received_utc"],
+        }
+
+        # MVP policy: load project forces STOP
+        self._set_state("STOP")
+
+        return {
+            "loaded": True,
+            "project_info": self.project_info,
+        }
 
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, rt: LocalSimRuntime, shutdown_evt: asyncio.Event) -> None:
@@ -235,6 +357,8 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                     out = {"owner_id": owner_id}
                 elif cmd == "GET_FORCES":
                     out = {"forces": rt.forces.snapshot()}
+                elif cmd == "LOAD_PROJECT":
+                    out = rt.handle_load_project(payload)
                 elif cmd == "SHUTDOWN":
                     # LocalSim only: graceful shutdown
                     out = {"shutting_down": True}

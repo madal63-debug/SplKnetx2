@@ -1,0 +1,3 @@
+cd C:\SplKnetx
+.\knetxenv313\Scripts\Activate.ps1
+pyinstaller --noconsole --onefile --name knetx_ide .\ide\knetx_ide_lite.py

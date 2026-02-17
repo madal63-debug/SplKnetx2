@@ -202,15 +202,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sheetbar_wrap.setFixedHeight(28)
         hb = QtWidgets.QHBoxLayout(self.sheetbar_wrap)
         hb.setContentsMargins(6, 2, 6, 2)
-        hb.setSpacing(4)
+        hb.setSpacing(2)
 
         self.btn_error_log = QtWidgets.QPushButton("Log Errori")
         self.btn_error_log.setFixedHeight(22)
         self.btn_error_log.setCheckable(True)
         self.btn_error_log.toggled.connect(self.toggle_error_log_window)
         hb.addWidget(self.btn_error_log, 0, QtCore.Qt.AlignLeft)
-
-        hb.addStretch(1)
 
         self.sheetbar = QtWidgets.QTabBar()
         self.sheetbar.setExpanding(False)
@@ -227,7 +225,8 @@ class MainWindow(QtWidgets.QMainWindow):
             "QTabBar::tab:!selected{color:#222;}"
         )
 
-        hb.addWidget(self.sheetbar, 0, QtCore.Qt.AlignRight)
+        hb.addWidget(self.sheetbar, 0, QtCore.Qt.AlignLeft)
+        hb.addStretch(1)
         self.right_layout.addWidget(self.sheetbar_wrap, 0)
 
     def _build_statusbar(self) -> None:

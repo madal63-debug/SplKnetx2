@@ -203,6 +203,13 @@ class MainWindow(QtWidgets.QMainWindow):
         hb = QtWidgets.QHBoxLayout(self.sheetbar_wrap)
         hb.setContentsMargins(6, 2, 6, 2)
         hb.setSpacing(4)
+
+        self.btn_error_log = QtWidgets.QPushButton("Log Errori")
+        self.btn_error_log.setFixedHeight(22)
+        self.btn_error_log.setCheckable(True)
+        self.btn_error_log.toggled.connect(self.toggle_error_log_window)
+        hb.addWidget(self.btn_error_log, 0, QtCore.Qt.AlignLeft)
+
         hb.addStretch(1)
 
         self.sheetbar = QtWidgets.QTabBar()
@@ -227,6 +234,54 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_status = QtWidgets.QLabel("OFFLINE")
         sb = self.statusBar()
         sb.addWidget(self.lbl_status)
+
+    def _ensure_error_log_window(self) -> None:
+        if hasattr(self, "error_log_window"):
+            return
+
+        self.error_log_window = QtWidgets.QWidget(self, QtCore.Qt.Window)
+        self.error_log_window.setWindowTitle("Log Errori")
+        self.error_log_window.resize(760, 320)
+
+        lay = QtWidgets.QVBoxLayout(self.error_log_window)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(6)
+
+        self.error_log_view = QtWidgets.QPlainTextEdit()
+        self.error_log_view.setReadOnly(True)
+        self.error_log_view.setStyleSheet("font-size:11px;")
+        lay.addWidget(self.error_log_view, 1)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.addStretch(1)
+        self.btn_error_log_copy = QtWidgets.QPushButton("Copia")
+        self.btn_error_log_copy.clicked.connect(self.copy_error_log_text)
+        btn_row.addWidget(self.btn_error_log_copy)
+        lay.addLayout(btn_row)
+
+        self.error_log_window.installEventFilter(self)
+        self.error_log_view.setPlainText(self.output.toPlainText())
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if hasattr(self, "error_log_window") and obj is self.error_log_window and event.type() == QtCore.QEvent.Close:
+            self.btn_error_log.blockSignals(True)
+            self.btn_error_log.setChecked(False)
+            self.btn_error_log.blockSignals(False)
+        return super().eventFilter(obj, event)
+
+    def toggle_error_log_window(self, checked: bool) -> None:
+        self._ensure_error_log_window()
+        if checked:
+            self.error_log_view.setPlainText(self.output.toPlainText())
+            self.error_log_window.show()
+            self.error_log_window.raise_()
+            self.error_log_window.activateWindow()
+            return
+        self.error_log_window.hide()
+
+    def copy_error_log_text(self) -> None:
+        if hasattr(self, "error_log_view"):
+            QtWidgets.QApplication.clipboard().setText(self.error_log_view.toPlainText())
 
     def _build_style(self) -> None:
         self.setStyleSheet(
@@ -274,6 +329,8 @@ class MainWindow(QtWidgets.QMainWindow):
     # ----------------
     def log(self, s: str) -> None:
         self.output.appendPlainText(s)
+        if hasattr(self, "error_log_view"):
+            self.error_log_view.appendPlainText(s)
 
     # ----------------
     # Tree population
@@ -1364,4 +1421,3 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def stub_download(self) -> None:
         self.do_send()
-

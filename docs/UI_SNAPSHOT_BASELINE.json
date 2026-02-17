@@ -1,0 +1,62 @@
+{
+  "menu_bar": {
+    "File": [
+      {
+        "name": "Nuovo progetto",
+        "shortcut": ""
+      },
+      {
+        "name": "Apri progetto",
+        "shortcut": ""
+      },
+      {
+        "name": "Chiudi progetto",
+        "shortcut": ""
+      },
+      {
+        "name": "Salva",
+        "shortcut": "Ctrl+S"
+      },
+      {
+        "name": "Salva tutto",
+        "shortcut": ""
+      },
+      {
+        "name": "Salva con nome...",
+        "shortcut": ""
+      },
+      {
+        "name": "Esci",
+        "shortcut": ""
+      }
+    ],
+    "Progetto": [
+      {
+        "name": "Aggiungi pagina",
+        "shortcut": ""
+      },
+      {
+        "name": "Elimina progetto",
+        "shortcut": ""
+      }
+    ]
+  },
+  "toolbar": [
+    {
+      "name": "Settings",
+      "shortcut": ""
+    },
+    {
+      "name": "Connetti",
+      "shortcut": ""
+    },
+    {
+      "name": "Compila",
+      "shortcut": ""
+    },
+    {
+      "name": "Send",
+      "shortcut": ""
+    }
+  ]
+}
